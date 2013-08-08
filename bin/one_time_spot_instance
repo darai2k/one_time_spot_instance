@@ -1,0 +1,46 @@
+#!/usr/bin/env ruby
+
+require 'logger'
+require 'optparse'
+require 'yaml'
+require 'active_support/core_ext/hash'
+require 'one_time_spot_instance'
+
+logger = Logger.new(STDOUT)
+
+options = {}
+
+parser = OptionParser.new
+parser.on("-f", "--file FILE_NAME") do |v|
+  options = YAML.load_file(File.expand_path(v)).symbolize_keys
+end
+parser.parse!
+
+core = OneTimeSpotInstance::Core.new(options)
+puts "Final spot price: #{core.final_spot_price.to_s}"
+print "Request spot price: "
+spot_price = gets.chomp.to_f
+request_spot_instances = core.request_spot_instance(spot_price)
+spot_instance_request_id = request_spot_instances.first[:spot_instance_request_id]
+tags = [{ key: "Name", value: "OneTimeSpotInstance" }]
+
+counter = 0
+sleep 120
+begin
+  instance_id = core.instance_id(spot_instance_request_id)
+  core.create_tags(resources: [instance_id], tags: tags)
+rescue => e
+  logger.debug e.message
+  counter += 1
+  raise "Failed to create instance tag." if counter == 10
+  logger.info "Retry create tag to instance."
+  puts "sleep 30"
+  sleep 30
+  retry
+ensure
+  core.cancel_spot_instance_requests(spot_instance_request_ids: [spot_instance_request_id])
+end
+
+instance = core.describe_instances(instance_ids: [instance_id])[:reservation_set].first[:instances_set].first
+puts instance[:dns_name]
+puts instance_id
